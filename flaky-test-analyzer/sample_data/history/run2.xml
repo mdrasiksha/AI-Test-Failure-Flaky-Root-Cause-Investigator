@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="shop-run-2" tests="3">
+  <testcase classname="tests.test_shop" name="test_login" time="0.10"/>
+  <testcase classname="tests.test_shop" name="test_payment" time="5.00">
+    <failure type="TimeoutError" message="Timeout 5000ms exceeded">waiting for payment confirmation</failure>
+  </testcase>
+  <testcase classname="tests.test_shop" name="test_checkout" time="0.15">
+    <failure type="AssertionError" message="checkout total mismatch">Expected total to equal 42</failure>
+  </testcase>
+</testsuite>

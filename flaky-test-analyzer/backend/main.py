@@ -2,6 +2,8 @@
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
+from backend.classifier import classify_failure
+from backend.flaky_detector import analyze_history
 from backend.parser import JUnitParseError, parse_junit_xml
 
 app = FastAPI(title="Flaky Test Analyzer API")
@@ -18,7 +20,9 @@ def health() -> dict[str, str]:
 
 
 @app.post("/upload-junit")
-async def upload_junit(file: UploadFile | None = File(default=None)) -> dict[str, object]:
+async def upload_junit(
+    file: UploadFile | None = File(default=None),
+) -> dict[str, object]:
     """Parse an uploaded JUnit report without persisting it."""
 
     if file is None or not file.filename:
@@ -35,12 +39,78 @@ async def upload_junit(file: UploadFile | None = File(default=None)) -> dict[str
     finally:
         await file.close()
 
-    counts = {status: sum(test["status"] == status for test in tests) for status in ("passed", "failed", "error", "skipped")}
+    if not tests:
+        raise HTTPException(
+            status_code=400, detail="The JUnit XML contains no testcases"
+        )
+
+    response_tests = [
+        {
+            **test,
+            "classification": (
+                classify_failure(test)
+                if test["status"] in {"failed", "error"}
+                else None
+            ),
+        }
+        for test in tests
+    ]
+
+    counts = {
+        status: sum(test["status"] == status for test in tests)
+        for status in ("passed", "failed", "error", "skipped")
+    }
     return {
         "total_tests": len(tests),
         "passed": counts["passed"],
         "failed": counts["failed"],
         "errors": counts["error"],
         "skipped": counts["skipped"],
+        "tests": response_tests,
+    }
+
+
+@app.post("/analyze-history")
+async def analyze_junit_history(
+    files: list[UploadFile] | None = File(default=None),
+) -> dict[str, object]:
+    """Analyze multiple JUnit reports in their multipart upload order."""
+
+    if not files:
+        raise HTTPException(
+            status_code=400, detail="At least one JUnit XML file is required"
+        )
+
+    runs = []
+    for position, file in enumerate(files, start=1):
+        filename = file.filename or f"file {position}"
+        try:
+            content = await file.read()
+            if not content:
+                raise HTTPException(
+                    status_code=400, detail=f"History file '{filename}' is empty"
+                )
+            try:
+                tests = parse_junit_xml(content)
+            except JUnitParseError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid history file '{filename}': {exc}"
+                ) from exc
+            if not tests:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"History file '{filename}' contains no testcases",
+                )
+            runs.append(tests)
+        finally:
+            await file.close()
+
+    tests = analyze_history(runs)
+    return {
+        "runs_analyzed": len(runs),
+        "tests_analyzed": len(tests),
+        "flaky_tests": sum(
+            test["flaky_status"] in {"possible", "high"} for test in tests
+        ),
         "tests": tests,
     }
