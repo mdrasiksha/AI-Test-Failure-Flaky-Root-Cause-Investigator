@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 REDACTED = "[REDACTED]"
 
@@ -19,6 +20,23 @@ _PATTERNS = (
     ),
     (re.compile(r"(?i)((?:cookie|set-cookie)\s*:\s*)[^\r\n]+"), r"\1" + REDACTED),
 )
+SENSITIVE_QUERY_KEYS = frozenset(
+    {"token", "access_token", "key", "api_key", "password", "session", "auth", "code"}
+)
+
+
+def sanitize_url(value: str) -> str:
+    """Redact common secret-bearing query parameters while preserving URL utility."""
+    try:
+        parts = urlsplit(value)
+        query = urlencode(
+            [(key, REDACTED if key.lower() in SENSITIVE_QUERY_KEYS else item) for key, item in parse_qsl(parts.query, keep_blank_values=True)],
+            doseq=True,
+            safe="[]",
+        )
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    except (TypeError, ValueError):
+        return sanitize_text(value)
 
 
 def sanitize_text(value: str, max_chars: int | None = None) -> str:

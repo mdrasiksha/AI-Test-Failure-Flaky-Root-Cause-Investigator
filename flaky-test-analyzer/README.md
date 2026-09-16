@@ -178,3 +178,51 @@ AI analysis is advisory, may be incorrect, and is based only on available
 evidence. It should not replace engineering investigation. In particular,
 `ownership_hint` is an investigative hint—not proof that a failure belongs to
 QA, development, infrastructure, or any other team.
+
+## Playwright Trace Analysis
+
+Step 7 adds bounded, extraction-free analysis of Playwright `trace.zip` files. Start
+tracing in Python Playwright and save the archive when the test finishes:
+
+```python
+context.tracing.start(screenshots=True, snapshots=True, sources=True)
+# ... run the test ...
+context.tracing.stop(path="trace.zip")
+```
+
+A pytest-playwright configuration may already retain traces, depending on its trace
+settings. Open `http://127.0.0.1:8000/docs` and use `POST /analyze-trace` with:
+
+- `trace_file`: required Playwright ZIP;
+- `junit_file`: optional JUnit XML. The API combines the evidence but explicitly
+  reports that trace-to-test mapping is uncertain;
+- `use_ai=false` (the default): deterministic parsing and rules only; or
+- `use_ai=true`: send only the compact, sanitized trace summary to the optional AI
+  investigator. `OPENAI_API_KEY` is needed only for this choice.
+
+The parser inventories resources but does not extract them, inspect screenshots, or
+send binary files, raw bodies, cookies, authorization headers, or the archive to AI.
+URL query parameters commonly used for tokens and credentials are redacted. Archive
+file count, entry size, aggregate size, upload size, path safety, file type, and
+compression ratio are validated before content is read.
+
+> **Privacy warning:** Playwright traces can contain sensitive application
+> information. Only upload traces that you are authorized to analyze.
+
+### Trace examples
+
+Generate the synthetic ZIP examples locally first. The generated archives are
+ignored by Git so code-review systems do not need to accept binary patches:
+
+```bash
+python sample_data/traces/generate_samples.py
+```
+
+```bash
+curl -F trace_file=@sample_data/traces/locator_timeout.zip \
+  'http://127.0.0.1:8000/analyze-trace?use_ai=false'
+
+curl -F trace_file=@sample_data/traces/network_503.zip \
+  -F junit_file=@sample_data/junit.xml \
+  'http://127.0.0.1:8000/analyze-trace?use_ai=true'
+```

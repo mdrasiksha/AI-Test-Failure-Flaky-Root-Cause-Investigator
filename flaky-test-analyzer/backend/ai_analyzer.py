@@ -52,7 +52,9 @@ implementation, application defects, synchronization, locator instability, test 
 network, environment, and CI infrastructure. Do not default to increasing timeouts,
 time.sleep(), or page.wait_for_timeout(). Prefer meaningful application states. Suggest code
 only when evidence supports it. Keep the investigation concise and actionable. ownership_hint
-is an investigative hint, never proof or a definitive assignment of ownership."""
+is an investigative hint, never proof or a definitive assignment of ownership. Trace evidence
+is additional factual evidence: never invent actions or network requests, prefer observed trace
+facts over unsupported guesses, and never claim that temporal correlation proves causation."""
 
 AI_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
