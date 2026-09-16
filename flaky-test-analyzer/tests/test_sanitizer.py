@@ -1,4 +1,4 @@
-from backend.sanitizer import sanitize_text
+from backend.sanitizer import sanitize_text, sanitize_url
 
 
 def test_redacts_bearer_token() -> None:
@@ -26,3 +26,8 @@ def test_long_trace_is_trimmed_and_repeated_lines_removed() -> None:
     assert result.startswith("same\n")
     assert result.endswith("...[TRUNCATED]")
     assert len(result) == 40
+
+
+def test_sensitive_url_query_parameters_are_redacted() -> None:
+    result = sanitize_url("https://example.test/callback?token=abc123&id=10&api_key=nope")
+    assert result == "https://example.test/callback?token=[REDACTED]&id=10&api_key=[REDACTED]"

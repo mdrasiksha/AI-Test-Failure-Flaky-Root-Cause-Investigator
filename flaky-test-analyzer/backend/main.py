@@ -5,11 +5,28 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.ai_analyzer import AIAnalyzerError, AIConfigurationError, analyze_with_ai
 from backend.classifier import classify_failure
+from backend.config import MAX_TRACE_UPLOAD_MB
 from backend.flaky_detector import analyze_history, get_test_id
 from backend.parser import JUnitParseError, parse_junit_xml
 from backend.playwright_analyzer import analyze_playwright_failure
+from backend.trace_analyzer import analyze_trace, compact_trace_summary
+from backend.trace_parser import parse_trace_zip
+from backend.zip_utils import TraceArchiveError
 
 app = FastAPI(title="Flaky Test Analyzer API")
+
+
+async def _run_ai(evidence: dict[str, object]) -> dict[str, object]:
+    try:
+        return await run_in_threadpool(analyze_with_ai, evidence)
+    except AIConfigurationError as exc:
+        raise HTTPException(
+            status_code=503, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
+    except AIAnalyzerError as exc:
+        raise HTTPException(
+            status_code=502, detail={"code": exc.code, "message": str(exc)}
+        ) from exc
 
 
 def build_ai_evidence(
@@ -43,6 +60,69 @@ def root() -> dict[str, str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/analyze-trace")
+async def analyze_trace_upload(
+    trace_file: UploadFile | None = File(default=None),
+    junit_file: UploadFile | None = File(default=None),
+    use_ai: bool = False,
+) -> dict[str, object]:
+    """Safely inspect a trace ZIP and optionally combine it with JUnit evidence."""
+    if trace_file is None or not trace_file.filename:
+        raise HTTPException(status_code=400, detail="A Playwright trace ZIP is required")
+    try:
+        content = await trace_file.read(MAX_TRACE_UPLOAD_MB * 1024 * 1024 + 1)
+        normalized = parse_trace_zip(content, trace_file.filename)
+    except TraceArchiveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await trace_file.close()
+    analysis = analyze_trace(normalized)
+    combined = None
+    if junit_file is not None and junit_file.filename:
+        try:
+            raw = await junit_file.read()
+            junit_results = parse_junit_xml(raw)
+        except JUnitParseError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await junit_file.close()
+        failures = [
+            test for test in junit_results if test["status"] in {"failed", "error"}
+        ]
+        combined = [
+            {
+                **test,
+                "classification": classify_failure(test),
+                "framework_analysis": analyze_playwright_failure(test),
+            }
+            for test in failures
+        ]
+    summary = compact_trace_summary(analysis)
+    ai_analysis = None
+    if use_ai:
+        evidence: dict[str, object] = {
+            "test_name": (combined or [{}])[0].get("test_name")
+            or "unknown trace test",
+            "trace_analysis": summary,
+        }
+        if combined:
+            evidence["junit_analysis"] = combined
+        ai_analysis = await _run_ai(evidence)
+    return {
+        "trace": {"valid": True, **normalized["inventory"]},
+        "analysis": analysis,
+        "junit_analysis": combined,
+        "mapping_note": (
+            "Trace-to-JUnit mapping is uncertain; evidence was combined without "
+            "asserting identity."
+            if combined
+            else None
+        ),
+        "ai_evidence": summary,
+        "ai_analysis": ai_analysis,
+    }
 
 
 @app.post("/upload-junit")
