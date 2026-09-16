@@ -1,8 +1,10 @@
 # Flaky Test Analyzer
 
 This MVP is a FastAPI service that parses JUnit XML, classifies failures with
-deterministic rules, and detects historically inconsistent test outcomes. It
-does not use AI/LLMs or assign statistical probabilities.
+deterministic rules, detects historically inconsistent test outcomes, and can
+optionally request an advisory AI root-cause investigation. Deterministic
+analysis remains available without an AI provider. AI confidence is qualitative,
+not a statistical probability.
 
 ## Local setup
 
@@ -90,6 +92,7 @@ a machine-learning, AI, or statistical probability.
 - `GET /health` returns a basic health status.
 - `POST /upload-junit` parses and classifies one JUnit XML report.
 - `POST /analyze-history` analyzes multiple chronological JUnit XML reports.
+- `POST /analyze-ai` optionally investigates failed tests with an AI provider.
 
 Reports are parsed in memory and are not stored.
 
@@ -132,3 +135,46 @@ automatically recommend increasing global timeouts, `page.wait_for_timeout`, or
 fixed sleeps, because these workarounds can hide the underlying problem and
 slow the suite. A timeout increase may be appropriate for a genuinely slow
 operation only after that underlying behavior has been investigated.
+
+## AI Root-Cause Analysis
+
+The optional `POST /analyze-ai` endpoint accepts one JUnit XML file in the
+multipart field `file`. It analyzes each failed or errored testcase separately;
+passed and skipped tests do not cause an AI request. The response preserves the
+generic classification and Playwright analysis alongside the AI investigation.
+
+Copy the example environment file, add your own key, and optionally select a
+different model:
+
+```bash
+cp .env.example .env
+# Edit .env and set OPENAI_API_KEY. Never commit this file.
+uvicorn backend.main:app --reload
+```
+
+Open <http://127.0.0.1:8000/docs>, expand **POST /analyze-ai**, choose (for
+example) `sample_data/playwright/locator_timeout.xml`, and select **Execute**.
+The existing `/upload-junit` and `/analyze-history` endpoints continue to work
+when `OPENAI_API_KEY` is absent. `/analyze-ai` returns a controlled configuration
+error until a key is configured.
+
+Only a compact evidence object is sent: testcase identity/name/status; failure
+type, message, and stack trace; the generic deterministic classification; and,
+when detected, the deterministic Playwright analysis. A single-report request
+does not invent or send history that is unavailable. It does not send the whole
+JUnit document or unrelated application data.
+
+Before transmission, obvious authorization values, bearer tokens, API keys,
+passwords, cookies, and session/access tokens are redacted on a best-effort
+basis. Consecutive duplicate lines are removed, and each text field is limited
+to `AI_MAX_TEXT_CHARS` (12,000 by default) with an explicit truncation marker.
+These safeguards are intentionally configurable and do **not** guarantee that
+every possible secret will be found.
+
+> **Privacy warning:** Review logs and test artifacts before sending them to an
+> external AI provider because they may contain sensitive information.
+
+AI analysis is advisory, may be incorrect, and is based only on available
+evidence. It should not replace engineering investigation. In particular,
+`ownership_hint` is an investigative hint—not proof that a failure belongs to
+QA, development, infrastructure, or any other team.
