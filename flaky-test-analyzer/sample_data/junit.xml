@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="pytest" tests="3" failures="1" skipped="1">
+    <testcase classname="tests.test_login" name="test_valid_login" time="0.42" />
+    <testcase classname="tests.test_login" name="test_login_timeout" time="7.21">
+        <failure type="TimeoutError" message="Timeout 5000ms exceeded">
+            Locator('#login').click: Timeout 5000ms exceeded
+        </failure>
+    </testcase>
+    <testcase classname="tests.test_payment" name="test_payment" time="2.10">
+        <skipped message="temporarily disabled" />
+    </testcase>
+</testsuite>
