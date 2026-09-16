@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="playwright-locator" tests="1">
+  <testcase classname="tests.test_payment" name="test_payment" time="5.1">
+    <failure type="TimeoutError" message="locator.click: Timeout 5000ms exceeded"><![CDATA[Call log:
+waiting for get_by_role("button", name="Pay")]]></failure>
+  </testcase>
+</testsuite>

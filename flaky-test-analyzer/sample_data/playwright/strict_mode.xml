@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="playwright-strict" tests="1"><testcase classname="tests.test_shop" name="test_submit"><failure type="Error" message="locator.click: strict mode violation"><![CDATA[get_by_role("button", name="Submit") resolved to 2 elements]]></failure></testcase></testsuite>

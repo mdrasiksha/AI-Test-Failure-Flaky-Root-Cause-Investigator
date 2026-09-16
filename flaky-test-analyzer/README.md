@@ -92,3 +92,43 @@ a machine-learning, AI, or statistical probability.
 - `POST /analyze-history` analyzes multiple chronological JUnit XML reports.
 
 Reports are parsed in memory and are not stored.
+
+## Playwright Failure Analysis
+
+Failed and errored Playwright tests also receive a `framework_analysis`. This
+analysis uses deterministic, explicitly prioritized rules—not AI or an LLM—to
+identify Playwright-specific locator, actionability, assertion, navigation,
+network, browser lifecycle, selector, and API-response failures. Non-Playwright
+failures return `framework_analysis: null`.
+
+For example, this JUnit failure text:
+
+```text
+TimeoutError: locator.click: Timeout 5000ms exceeded
+Call log:
+waiting for get_by_role("button", name="Pay")
+```
+
+produces analysis including:
+
+```json
+{
+  "framework": "playwright",
+  "issue_type": "locator_not_found",
+  "category": "locator",
+  "confidence": "high",
+  "timeout_increase_recommended": false,
+  "metadata": {
+    "action": "locator.click",
+    "timeout_ms": 5000,
+    "locator": "get_by_role(\"button\", name=\"Pay\")"
+  }
+}
+```
+
+Try it with `sample_data/playwright/locator_timeout.xml`. The analyzer advises
+investigating the locator and meaningful application state first. It does not
+automatically recommend increasing global timeouts, `page.wait_for_timeout`, or
+fixed sleeps, because these workarounds can hide the underlying problem and
+slow the suite. A timeout increase may be appropriate for a genuinely slow
+operation only after that underlying behavior has been investigated.
