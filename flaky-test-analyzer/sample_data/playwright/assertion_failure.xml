@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="playwright-assertion" tests="1"><testcase classname="tests.test_shop" name="test_confirmation"><failure type="AssertionError" message="expect(locator).to_have_text: Timeout 5000ms exceeded"><![CDATA[Expected: "Paid"
+Received: "Pending"]]></failure></testcase></testsuite>

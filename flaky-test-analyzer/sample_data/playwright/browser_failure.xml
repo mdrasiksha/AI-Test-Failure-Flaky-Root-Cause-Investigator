@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="playwright-browser" tests="1"><testcase classname="tests.test_setup" name="test_browser"><error type="Error" message="browserType.launch: Executable doesn't exist"/></testcase></testsuite>

@@ -3,8 +3,9 @@
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from backend.classifier import classify_failure
-from backend.flaky_detector import analyze_history
+from backend.flaky_detector import analyze_history, get_test_id
 from backend.parser import JUnitParseError, parse_junit_xml
+from backend.playwright_analyzer import analyze_playwright_failure
 
 app = FastAPI(title="Flaky Test Analyzer API")
 
@@ -49,6 +50,11 @@ async def upload_junit(
             **test,
             "classification": (
                 classify_failure(test)
+                if test["status"] in {"failed", "error"}
+                else None
+            ),
+            "framework_analysis": (
+                analyze_playwright_failure(test)
                 if test["status"] in {"failed", "error"}
                 else None
             ),
@@ -106,6 +112,13 @@ async def analyze_junit_history(
             await file.close()
 
     tests = analyze_history(runs)
+    latest_failures = {}
+    for run in runs:
+        for result in run:
+            if result["status"] in {"failed", "error"}:
+                latest_failures[get_test_id(result)] = analyze_playwright_failure(result)
+    for test in tests:
+        test["latest_failure_analysis"] = latest_failures.get(test["test_id"])
     return {
         "runs_analyzed": len(runs),
         "tests_analyzed": len(tests),
