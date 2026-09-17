@@ -4,14 +4,20 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from backend.ai_analyzer import AIAnalyzerError, AIConfigurationError, analyze_with_ai
 from backend.classifier import classify_failure
-from backend.config import MAX_TRACE_UPLOAD_MB
+from backend.config import (
+    MAX_HISTORY_FILES,
+    MAX_HISTORY_TOTAL_MB,
+    MAX_TRACE_UPLOAD_MB,
+    MAX_UPLOAD_MB,
+    max_ai_tests_per_request,
+)
 from backend.flaky_detector import analyze_history, get_test_id
 from backend.parser import JUnitParseError, parse_junit_xml
 from backend.playwright_analyzer import analyze_playwright_failure
@@ -23,6 +29,47 @@ app = FastAPI(title="Flaky Test Analyzer API")
 _BASE_DIR = Path(__file__).resolve().parent.parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "frontend" / "static"), name="static")
 templates = Jinja2Templates(directory=_BASE_DIR / "frontend" / "templates")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Apply browser hardening without blocking the same-origin Jinja UI."""
+
+    content_length = request.headers.get("content-length")
+    max_request_bytes = max(
+        MAX_HISTORY_TOTAL_MB, MAX_TRACE_UPLOAD_MB + MAX_UPLOAD_MB
+    ) * 1024 * 1024 + 1024 * 1024
+    if content_length and content_length.isdigit() and int(content_length) > max_request_bytes:
+        response = JSONResponse(
+            status_code=413,
+            content={"detail": "Request body exceeds the configured limit"},
+        )
+    else:
+        response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https://fastapi.tiangolo.com; "
+        "object-src 'none'; base-uri 'self'; "
+        "form-action 'self'; frame-ancestors 'none'"
+    )
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
+async def _read_limited(upload: UploadFile, limit_mb: int, label: str) -> bytes:
+    """Read an upload in memory with an explicit byte limit."""
+
+    limit = limit_mb * 1024 * 1024
+    content = await upload.read(limit + 1)
+    if len(content) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{label} exceeds the configured {limit_mb} MB upload limit",
+        )
+    return content
 
 
 def _upload(data: bytes, filename: str, content_type: str) -> UploadFile:
@@ -96,7 +143,7 @@ def api_info() -> dict[str, str]:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "service": "flaky-test-analyzer"}
 
 
 @app.post("/analyze-trace")
@@ -107,9 +154,13 @@ async def analyze_trace_upload(
 ) -> dict[str, object]:
     """Safely inspect a trace ZIP and optionally combine it with JUnit evidence."""
     if trace_file is None or not trace_file.filename:
+        if trace_file:
+            await trace_file.close()
+        if junit_file:
+            await junit_file.close()
         raise HTTPException(status_code=400, detail="A Playwright trace ZIP is required")
     try:
-        content = await trace_file.read(MAX_TRACE_UPLOAD_MB * 1024 * 1024 + 1)
+        content = await _read_limited(trace_file, MAX_TRACE_UPLOAD_MB, "Trace upload")
         normalized = parse_trace_zip(content, trace_file.filename)
     except TraceArchiveError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -119,7 +170,7 @@ async def analyze_trace_upload(
     combined = None
     if junit_file is not None and junit_file.filename:
         try:
-            raw = await junit_file.read()
+            raw = await _read_limited(junit_file, MAX_UPLOAD_MB, "JUnit upload")
             junit_results = parse_junit_xml(raw)
         except JUnitParseError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -136,6 +187,8 @@ async def analyze_trace_upload(
             }
             for test in failures
         ]
+    elif junit_file is not None:
+        await junit_file.close()
     summary = compact_trace_summary(analysis)
     ai_analysis = None
     if use_ai:
@@ -169,13 +222,14 @@ async def upload_junit(
     """Parse an uploaded JUnit report without persisting it."""
 
     if file is None or not file.filename:
+        if file:
+            await file.close()
         raise HTTPException(status_code=400, detail="A JUnit XML file is required")
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="The uploaded XML file is empty")
-
     try:
+        content = await _read_limited(file, MAX_UPLOAD_MB, "JUnit upload")
+        if not content:
+            raise HTTPException(status_code=400, detail="The uploaded XML file is empty")
         tests = parse_junit_xml(content)
     except JUnitParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -228,12 +282,29 @@ async def analyze_junit_history(
         raise HTTPException(
             status_code=400, detail="At least one JUnit XML file is required"
         )
+    if len(files) > MAX_HISTORY_FILES:
+        for file in files:
+            await file.close()
+        raise HTTPException(
+            status_code=413,
+            detail=f"History upload is limited to {MAX_HISTORY_FILES} reports",
+        )
 
     runs = []
-    for position, file in enumerate(files, start=1):
-        filename = file.filename or f"file {position}"
-        try:
-            content = await file.read()
+    total_bytes = 0
+    try:
+        for position, file in enumerate(files, start=1):
+            filename = file.filename or f"file {position}"
+            content = await _read_limited(file, MAX_UPLOAD_MB, "JUnit upload")
+            total_bytes += len(content)
+            if total_bytes > MAX_HISTORY_TOTAL_MB * 1024 * 1024:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Combined history uploads exceed the configured "
+                        f"{MAX_HISTORY_TOTAL_MB} MB limit"
+                    ),
+                )
             if not content:
                 raise HTTPException(
                     status_code=400, detail=f"History file '{filename}' is empty"
@@ -250,7 +321,10 @@ async def analyze_junit_history(
                     detail=f"History file '{filename}' contains no testcases",
                 )
             runs.append(tests)
-        finally:
+    finally:
+        # UploadFile may use a spooled temporary file. Close every part even when
+        # an earlier report fails validation so no temporary upload survives.
+        for file in files:
             await file.close()
 
     tests = analyze_history(runs)
@@ -278,37 +352,36 @@ async def analyze_ai(file: UploadFile | None = File(default=None)) -> dict[str, 
     """Run optional AI investigation for each failed/error testcase."""
 
     if file is None or not file.filename:
+        if file:
+            await file.close()
         raise HTTPException(status_code=400, detail="A JUnit XML file is required")
-    content = await file.read()
-    await file.close()
-    if not content:
-        raise HTTPException(status_code=400, detail="The uploaded XML file is empty")
     try:
+        content = await _read_limited(file, MAX_UPLOAD_MB, "JUnit upload")
+        if not content:
+            raise HTTPException(status_code=400, detail="The uploaded XML file is empty")
         tests = parse_junit_xml(content)
     except JUnitParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
     if not tests:
         raise HTTPException(
             status_code=400, detail="The JUnit XML contains no testcases"
         )
 
     results: list[dict[str, object]] = []
+    ai_limit = max_ai_tests_per_request()
+    failures_seen = 0
     for test in tests:
         if test["status"] not in {"failed", "error"}:
             continue
         classification = classify_failure(test)
         framework_analysis = analyze_playwright_failure(test)
-        evidence = build_ai_evidence(test, classification, framework_analysis)
-        try:
-            ai_analysis = await run_in_threadpool(analyze_with_ai, evidence)
-        except AIConfigurationError as exc:
-            raise HTTPException(
-                status_code=503, detail={"code": exc.code, "message": str(exc)}
-            ) from exc
-        except AIAnalyzerError as exc:
-            raise HTTPException(
-                status_code=502, detail={"code": exc.code, "message": str(exc)}
-            ) from exc
+        failures_seen += 1
+        ai_analysis = None
+        if failures_seen <= ai_limit:
+            evidence = build_ai_evidence(test, classification, framework_analysis)
+            ai_analysis = await _run_ai(evidence)
         results.append(
             {
                 "test_name": test["test_name"],
@@ -319,9 +392,20 @@ async def analyze_ai(file: UploadFile | None = File(default=None)) -> dict[str, 
                 "ownership_note": "ownership_hint is advisory investigative guidance, not proof of ownership.",
             }
         )
+    if not results:
+        # Retain the established no-failure response shape; no AI limit applies.
+        return {"total_tests": len(tests), "failures_analyzed": 0, "tests": []}
     return {
         "total_tests": len(tests),
-        "failures_analyzed": len(results),
+        "failures_analyzed": min(len(results), ai_limit),
+        "total_failures": len(results),
+        "ai_limit": ai_limit,
+        "ai_analysis_limited": len(results) > ai_limit,
+        "ai_limit_message": (
+            f"AI analysis was limited to {ai_limit} of {len(results)} failures; "
+            "deterministic analysis is included for every failure."
+            if len(results) > ai_limit else None
+        ),
         "tests": results,
     }
 
@@ -333,10 +417,16 @@ async def ui_analyze_junit(
     use_ai: bool = Form(default=False),
 ) -> HTMLResponse:
     if file is None or not file.filename:
+        if file:
+            await file.close()
         return _error_page(request, "Choose a JUnit XML file to analyze.")
     filename = Path(file.filename).name
-    data = await file.read()
-    await file.close()
+    try:
+        data = await _read_limited(file, MAX_UPLOAD_MB, "JUnit upload")
+    except HTTPException as exc:
+        return _error_page(request, _friendly_detail(exc), exc.status_code)
+    finally:
+        await file.close()
     if not filename.lower().endswith(".xml"):
         return _error_page(request, "JUnit reports must use the .xml extension.")
     try:
@@ -361,8 +451,12 @@ async def ui_analyze_history(
 ) -> HTMLResponse:
     files = files or []
     if len(files) < 2:
+        for item in files:
+            await item.close()
         return _error_page(request, "Upload at least two JUnit XML files in chronological order.")
     if any(not (item.filename or "").lower().endswith(".xml") for item in files):
+        for item in files:
+            await item.close()
         return _error_page(request, "Every history report must use the .xml extension.")
     try:
         result = await analyze_junit_history(files)
@@ -382,10 +476,19 @@ async def ui_analyze_trace(
     use_ai: bool = Form(default=False),
 ) -> HTMLResponse:
     if trace_file is None or not trace_file.filename:
+        if trace_file:
+            await trace_file.close()
+        if junit_file:
+            await junit_file.close()
         return _error_page(request, "Choose a Playwright trace ZIP to analyze.")
     if not trace_file.filename.lower().endswith(".zip"):
+        await trace_file.close()
+        if junit_file:
+            await junit_file.close()
         return _error_page(request, "Playwright traces must use the .zip extension.")
     if junit_file and junit_file.filename and not junit_file.filename.lower().endswith(".xml"):
+        await trace_file.close()
+        await junit_file.close()
         return _error_page(request, "The optional JUnit report must use the .xml extension.")
     try:
         result = await analyze_trace_upload(trace_file, junit_file, use_ai)

@@ -28,6 +28,9 @@ venv\Scripts\activate
 The API runs at <http://127.0.0.1:8000>, and its interactive Swagger UI is at
 <http://127.0.0.1:8000/docs>.
 
+For production and Docker startup, environment variables, upload limits, and
+HTTPS guidance, see [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Web Interface
 
 The server root is now a small, server-rendered QA application. After setup,
@@ -126,7 +129,7 @@ a machine-learning, AI, or statistical probability.
 
 - `GET /` renders the web interface.
 - `GET /api` returns basic API information.
-- `GET /health` returns a basic health status.
+- `GET /health` returns a basic, secret-free service health status.
 - `POST /upload-junit` parses and classifies one JUnit XML report.
 - `POST /analyze-history` analyzes multiple chronological JUnit XML reports.
 - `POST /analyze-ai` optionally investigates failed tests with an AI provider.
@@ -215,6 +218,10 @@ AI analysis is advisory, may be incorrect, and is based only on available
 evidence. It should not replace engineering investigation. In particular,
 `ownership_hint` is an investigative hint—not proof that a failure belongs to
 QA, development, infrastructure, or any other team.
+
+At most `MAX_AI_TESTS_PER_REQUEST` failed tests (five by default) are sent to the
+provider in one request. If a report has more failures, every failure still gets
+deterministic classification and the response explicitly reports the AI limit.
 
 ## Playwright Trace Analysis
 

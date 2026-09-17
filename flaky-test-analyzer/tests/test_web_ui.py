@@ -19,7 +19,9 @@ def test_home_is_product_html_and_forms_exist():
 
 
 def test_health_and_original_api_remain_available():
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/health").json() == {
+        "status": "ok", "service": "flaky-test-analyzer"
+    }
     sample = (ROOT / "sample_data/junit.xml").read_bytes()
     assert client.post("/upload-junit", files={"file": ("run.xml", sample, "application/xml")}).status_code == 200
 
