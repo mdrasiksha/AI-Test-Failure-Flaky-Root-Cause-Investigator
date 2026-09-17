@@ -28,6 +28,42 @@ venv\Scripts\activate
 The API runs at <http://127.0.0.1:8000>, and its interactive Swagger UI is at
 <http://127.0.0.1:8000/docs>.
 
+## Web Interface
+
+The server root is now a small, server-rendered QA application. After setup,
+start it and open <http://127.0.0.1:8000>:
+
+```bash
+python -m venv venv
+# Windows Command Prompt or PowerShell:
+venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn backend.main:app --reload
+```
+
+On macOS/Linux, activate with `source venv/bin/activate` instead. The interface
+provides four focused workflows:
+
+- **Test Failure** uploads one JUnit XML report for deterministic classification
+  and Playwright-specific guidance. AI investigation is an optional checkbox.
+- **Flaky History** accepts multiple chronological JUnit XML reports and displays
+  observed outcomes, failure rate, transitions, and the heuristic flaky status.
+- **Playwright Trace** accepts `trace.zip`, an optional JUnit XML report, and an
+  optional AI investigation. The report highlights the action timeline, trace
+  signals, and network problems without extracting or executing uploaded files.
+- **Try Sample** immediately analyzes the safe synthetic Playwright locator-timeout
+  report in `sample_data/playwright/locator_timeout.xml`; no upload is needed.
+
+Reports organize findings into QA-oriented cards, with expandable technical
+information and escaped raw JSON for debugging. Uploaded content is rendered as
+text, never trusted HTML. AI remains optional: if it is not configured, all
+regular deterministic workflows remain available. When trace AI analysis is
+selected, only compact sanitized diagnostic evidence is sent to the configured
+provider; the raw ZIP and binary resources are never sent.
+
+The interactive API documentation remains available at
+<http://127.0.0.1:8000/docs>, and `GET /api` provides basic API information.
+
 ## Analyze one JUnit report
 
 `POST /upload-junit` accepts one XML file using the multipart field `file`. It
@@ -88,7 +124,8 @@ a machine-learning, AI, or statistical probability.
 
 ## API endpoints
 
-- `GET /` returns the API name.
+- `GET /` renders the web interface.
+- `GET /api` returns basic API information.
 - `GET /health` returns a basic health status.
 - `POST /upload-junit` parses and classifies one JUnit XML report.
 - `POST /analyze-history` analyzes multiple chronological JUnit XML reports.
