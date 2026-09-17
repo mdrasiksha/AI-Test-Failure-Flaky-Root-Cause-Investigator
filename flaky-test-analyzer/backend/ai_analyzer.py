@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Mapping
 
 import openai
 from openai import OpenAI
 
-from backend.config import max_ai_text_chars, openai_model
+from backend.config import max_ai_text_chars, openai_api_key, openai_model
 from backend.sanitizer import sanitize_evidence
 
 ROOT_CAUSE_CATEGORIES = frozenset(
@@ -167,7 +166,7 @@ def analyze_with_ai(
 ) -> dict[str, Any]:
     """Sanitize evidence, request structured output, and return validated analysis."""
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = openai_api_key()
     if client is None and not api_key:
         raise AIConfigurationError("AI analysis is not configured; set OPENAI_API_KEY")
     safe_evidence = sanitize_evidence(dict(evidence), max_ai_text_chars())
