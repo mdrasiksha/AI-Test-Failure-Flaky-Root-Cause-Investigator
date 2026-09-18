@@ -5,7 +5,6 @@ import logging
 import os
 from pathlib import Path
 import secrets
-import sqlite3
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
@@ -48,7 +47,7 @@ def _record_event(*args: object, **kwargs: object) -> bool:
     except Exception:
         # The analytics module logs expected storage failures. This final guard
         # protects analysis if an unexpected analytics implementation fails.
-        logger.warning("Unexpected product analytics failure", exc_info=True)
+        logger.warning("Unexpected product analytics failure")
         return False
 
 
@@ -284,7 +283,7 @@ def internal_metrics(
         raise HTTPException(status_code=503, detail="Analytics is disabled")
     try:
         return analytics.aggregate_metrics(days)
-    except (OSError, sqlite3.Error, ValueError):
+    except (analytics.AnalyticsStorageError, ValueError):
         raise HTTPException(status_code=503, detail="Metrics are unavailable") from None
 
 

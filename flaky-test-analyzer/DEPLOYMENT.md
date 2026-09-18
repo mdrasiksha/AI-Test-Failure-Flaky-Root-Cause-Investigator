@@ -27,6 +27,7 @@ control.
 | --- | --- | --- | --- |
 | `APP_ENV` | Required | `production` | Enables production behavior, including `Secure` anonymous-session cookies. |
 | `ANALYTICS_ENABLED` | Required | `true` | Enables privacy-first, aggregate product analytics and anonymous feedback. Set `false` if analytics must be disabled. |
+| `DATABASE_URL` | Required for persistent Render analytics | Render PostgreSQL **internal** database URL | Selects PostgreSQL for analytics and feedback. Store this as a secret; never put it in the Blueprint or source. |
 | `ANALYTICS_RETENTION_DAYS` | Required when analytics is enabled | `30` | Retention window for analytics and feedback. |
 | `ANONYMOUS_SESSION_DAYS` | Required when analytics is enabled | `30` | Anonymous cookie lifetime. |
 | `ADMIN_METRICS_TOKEN` | Optional | Generate a long random secret in Render | Enables `/internal/metrics`; when unset, that endpoint returns 404. Supply it only in the `X-Admin-Token` header. |
@@ -39,12 +40,38 @@ optional tuning variables are `MAX_UPLOAD_MB` (default `10`),
 and `AI_MAX_TEXT_CHARS` (default `12000`). Invalid numeric settings fall back
 to safe defaults.
 
-### SQLite durability for this MVP
+## Persistent Analytics on Render
 
-Analytics use SQLite at `data/analytics.db` by default. **Render's default
-filesystem is ephemeral, so this analytics database is temporary and can be
-lost on a restart, redeploy, or instance replacement.** This initial deployment
-does not claim durable analytics and does not migrate to Postgres.
+Production analytics should use Render PostgreSQL so validation data survives
+web-service restarts, redeploys, and instance replacement. Configure it as
+follows:
+
+1. In the Render dashboard, select **New +** and create a **PostgreSQL** database
+   in the same region as the web service.
+2. Open that database's **Info** page and copy its **Internal Database URL**.
+3. Open the `flaky-test-analyzer` web service, select **Environment**, and add a
+   secret environment variable named `DATABASE_URL` whose value is that internal
+   URL. Do not paste the URL into `render.yaml` or source control.
+4. Save the environment change and redeploy the web service.
+5. Check `GET /health`; it should continue to return only the basic service status.
+6. Run a sample analysis from the application.
+7. Submit **Yes** or **No** feedback.
+8. Query `/internal/metrics` with the configured `X-Admin-Token` header.
+9. restart or redeploy the web service.
+10. Query the protected metrics endpoint again and confirm the data remains.
+
+Tables are created idempotently and expired rows are cleaned up at application
+startup. Existing rows are not dropped or recreated. A database outage does not
+disable JUnit, history, or trace analysis; feedback and metrics can report a
+controlled unavailable response while persistence is unavailable.
+
+### Local SQLite development
+
+When `DATABASE_URL` is absent (or is not a PostgreSQL URL), analytics continue
+to use SQLite at `ANALYTICS_DB_PATH`, defaulting to `data/analytics.db`. Developers
+do not need to install or run a PostgreSQL server. Render's web filesystem is
+ephemeral, so do not use this SQLite fallback when production persistence is
+required.
 
 Database creation, event recording, cleanup, and metrics failures are isolated
 from test analysis. If the database path is unavailable or its data disappears,
