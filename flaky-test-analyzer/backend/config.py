@@ -38,6 +38,19 @@ TRACE_TIMELINE_LIMIT = 10
 SLOW_REQUEST_THRESHOLD_MS = 5_000
 
 
+def database_url() -> str | None:
+    """Return the optional database URL without logging or exposing it."""
+
+    return os.getenv("DATABASE_URL") or None
+
+
+def analytics_database_backend() -> str:
+    """Select Postgres only for an explicitly configured Postgres URL."""
+
+    url = database_url()
+    return "postgresql" if url and url.lower().startswith(("postgres://", "postgresql://")) else "sqlite"
+
+
 def openai_model() -> str:
     """Return the configured model (read at call time to support test overrides)."""
 

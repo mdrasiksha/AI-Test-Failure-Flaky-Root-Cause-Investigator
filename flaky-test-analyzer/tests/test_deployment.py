@@ -75,6 +75,7 @@ def test_render_deployment_configuration():
     assert all(setting in blueprint for setting in expected_settings)
     assert "OPENAI_API_KEY" not in blueprint
     assert "ADMIN_METRICS_TOKEN" not in blueprint
+    assert "DATABASE_URL" not in blueprint
 
 
 def test_requirements_include_web_runtime_dependencies():
@@ -93,6 +94,7 @@ def test_requirements_include_web_runtime_dependencies():
         "openai",
         "python-dotenv",
         "jinja2",
+        "psycopg[binary]",
     } <= requirements
 
 
