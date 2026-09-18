@@ -1,14 +1,21 @@
 """FastAPI application for uploading and parsing JUnit XML reports."""
 
 from io import BytesIO
+import logging
+import os
 from pathlib import Path
+import secrets
+import sqlite3
+from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
+from backend import analytics
 from backend.ai_analyzer import AIAnalyzerError, AIConfigurationError, analyze_with_ai
 from backend.classifier import classify_failure
 from backend.config import (
@@ -29,6 +36,94 @@ app = FastAPI(title="Flaky Test Analyzer API")
 _BASE_DIR = Path(__file__).resolve().parent.parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "frontend" / "static"), name="static")
 templates = Jinja2Templates(directory=_BASE_DIR / "frontend" / "templates")
+logger = logging.getLogger(__name__)
+
+_SESSION_COOKIE = "anonymous_session_id"
+
+
+def _record_event(*args: object, **kwargs: object) -> bool:
+    """Keep analytics failures from affecting any analysis workflow."""
+    try:
+        return analytics.record_event(*args, **kwargs)
+    except Exception:
+        # The analytics module logs expected storage failures. This final guard
+        # protects analysis if an unexpected analytics implementation fails.
+        logger.warning("Unexpected product analytics failure", exc_info=True)
+        return False
+
+
+def _session_days() -> int:
+    try:
+        return max(1, int(os.getenv("ANONYMOUS_SESSION_DAYS", "30")))
+    except ValueError:
+        return 30
+
+
+analytics.initialize_storage()
+analytics.cleanup_expired_events()
+
+
+@app.middleware("http")
+async def anonymous_product_analytics(request: Request, call_next):
+    """Assign an opaque first-party session and record only route-level outcomes."""
+
+    session_id = request.cookies.get(_SESSION_COOKIE)
+    new_session = not session_id
+    if new_session:
+        session_id = secrets.token_urlsafe(24)
+    request.state.anonymous_session_id = session_id
+
+    path = request.url.path
+    analysis_types = {
+        "/upload-junit": "failure",
+        "/analyze-ai": "failure",
+        "/analyze-history": "history",
+        "/analyze-trace": "trace",
+        "/ui/analyze-junit": "failure",
+        "/ui/analyze-history": "history",
+        "/ui/analyze-trace": "trace",
+        "/sample": "sample",
+    }
+    analysis_type = analysis_types.get(path) if request.method in {"GET", "POST"} else None
+    if path == "/" and request.method == "GET":
+        _record_event(session_id, "page_view")
+    if path == "/sample" and request.method == "GET":
+        _record_event(session_id, "sample_used", "sample")
+    if analysis_type:
+        _record_event(session_id, "analysis_started", analysis_type)
+    direct_ai = path == "/analyze-ai" or (
+        path == "/analyze-trace" and request.query_params.get("use_ai", "false").lower() == "true"
+    )
+    if direct_ai:
+        _record_event(session_id, "ai_analysis_requested", analysis_type, True)
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        if analysis_type:
+            _record_event(session_id, "analysis_failed", analysis_type, direct_ai, False)
+        raise
+    if analysis_type:
+        succeeded = response.status_code < 400
+        _record_event(
+            session_id,
+            "analysis_completed" if succeeded else "analysis_failed",
+            analysis_type,
+            direct_ai if direct_ai else None,
+            succeeded,
+        )
+        if succeeded and direct_ai:
+            _record_event(session_id, "ai_analysis_completed", analysis_type, True, True)
+    if new_session and analytics.analytics_enabled():
+        response.set_cookie(
+            _SESSION_COOKIE,
+            session_id,
+            max_age=_session_days() * 24 * 60 * 60,
+            httponly=True,
+            samesite="lax",
+            secure=os.getenv("APP_ENV", "development").lower() == "production",
+        )
+    return response
 
 
 @app.middleware("http")
@@ -144,6 +239,53 @@ def api_info() -> dict[str, str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "flaky-test-analyzer"}
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request=request, name="privacy.html")
+
+
+class FeedbackSubmission(BaseModel):
+    """Strict feedback input with no diagnostic or identity fields."""
+
+    model_config = ConfigDict(extra="forbid")
+    useful: StrictBool
+    feedback_text: str | None = Field(default=None, max_length=500)
+    analysis_type: Literal["failure", "history", "trace", "sample"] | None = None
+
+
+@app.post("/feedback")
+def submit_feedback(request: Request, submission: FeedbackSubmission) -> dict[str, str]:
+    if not analytics.analytics_enabled():
+        raise HTTPException(status_code=503, detail="Feedback is currently unavailable")
+    saved = analytics.record_feedback(
+        request.state.anonymous_session_id,
+        submission.useful,
+        submission.feedback_text,
+        submission.analysis_type,
+    )
+    if not saved:
+        raise HTTPException(status_code=503, detail="Feedback is currently unavailable")
+    return {"message": "Thanks for the feedback."}
+
+
+@app.get("/internal/metrics")
+def internal_metrics(
+    days: int = Query(default=7, ge=1, le=90),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict[str, object]:
+    configured_token = os.getenv("ADMIN_METRICS_TOKEN")
+    if not configured_token:
+        raise HTTPException(status_code=404, detail="Not found")
+    if x_admin_token is None or not secrets.compare_digest(x_admin_token, configured_token):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+    if not analytics.analytics_enabled():
+        raise HTTPException(status_code=503, detail="Analytics is disabled")
+    try:
+        return analytics.aggregate_metrics(days)
+    except (OSError, sqlite3.Error, ValueError):
+        raise HTTPException(status_code=503, detail="Metrics are unavailable") from None
 
 
 @app.post("/analyze-trace")
@@ -432,11 +574,18 @@ async def ui_analyze_junit(
     try:
         result = await upload_junit(_upload(data, filename, "application/xml"))
         if use_ai:
+            _record_event(
+                request.state.anonymous_session_id, "ai_analysis_requested", "failure", True
+            )
             ai_result = await analyze_ai(_upload(data, filename, "application/xml"))
             by_name = {item["test_name"]: item for item in ai_result["tests"]}
             for test in result["tests"]:
                 if test["test_name"] in by_name:
                     test["ai_analysis"] = by_name[test["test_name"]]["ai_analysis"]
+            _record_event(
+                request.state.anonymous_session_id,
+                "ai_analysis_completed", "failure", True, True,
+            )
     except HTTPException as exc:
         return _error_page(request, _friendly_detail(exc), exc.status_code)
     return templates.TemplateResponse(request=request, name="report.html", context={
@@ -491,7 +640,16 @@ async def ui_analyze_trace(
         await junit_file.close()
         return _error_page(request, "The optional JUnit report must use the .xml extension.")
     try:
+        if use_ai:
+            _record_event(
+                request.state.anonymous_session_id, "ai_analysis_requested", "trace", True
+            )
         result = await analyze_trace_upload(trace_file, junit_file, use_ai)
+        if use_ai:
+            _record_event(
+                request.state.anonymous_session_id,
+                "ai_analysis_completed", "trace", True, True,
+            )
     except HTTPException as exc:
         return _error_page(request, _friendly_detail(exc), exc.status_code)
     return templates.TemplateResponse(request=request, name="report.html", context={

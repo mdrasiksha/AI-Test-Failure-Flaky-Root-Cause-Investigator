@@ -30,4 +30,28 @@
     await navigator.clipboard.writeText(button.closest('.ai-section').querySelector('.suggested-code').textContent);
     button.textContent = 'Copied';
   }));
+  document.querySelectorAll('[data-feedback]').forEach(panel => {
+    let useful = null; let sent = false;
+    const status = panel.querySelector('[data-feedback-status]');
+    const detail = panel.querySelector('.feedback-detail');
+    const send = async (feedbackText = null) => {
+      if (sent) return;
+      try {
+        const response = await fetch('/feedback', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({useful, feedback_text: feedbackText || null, analysis_type: panel.dataset.analysisType})});
+        if (!response.ok) throw new Error('unavailable');
+        sent = true; status.textContent = 'Thanks for the feedback.';
+        panel.querySelectorAll('button').forEach(button => { button.disabled = true; });
+      } catch (_) { status.textContent = 'Feedback is currently unavailable. Your analysis is unaffected.'; }
+    };
+    panel.querySelectorAll('[data-useful]').forEach(button => button.addEventListener('click', () => {
+      if (sent || useful !== null) return;
+      useful = button.dataset.useful === 'true';
+      detail.hidden = false;
+      status.textContent = 'Optionally add a note, then submit your feedback.';
+    }));
+    panel.querySelector('[data-submit-detail]').addEventListener('click', async () => {
+      if (sent) return;
+      await send(panel.querySelector('textarea').value);
+    });
+  });
 })();
