@@ -4,6 +4,7 @@ import asyncio
 from io import BytesIO
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -37,6 +38,62 @@ def test_application_imports_without_openai_api_key():
         check=True,
     )
     assert result.stdout.strip() == "Flaky Test Analyzer API"
+
+
+def test_application_imports_when_analytics_storage_is_unavailable():
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "ANALYTICS_ENABLED": "true",
+            "ANALYTICS_DB_PATH": "/dev/null/analytics.db",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "from backend.main import app; print(app.title)"],
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "Flaky Test Analyzer API"
+
+
+def test_render_deployment_configuration():
+    app_root = Path(__file__).resolve().parents[1]
+    repository_root = app_root.parent
+
+    assert (app_root / ".python-version").read_text() == "3.12.9\n"
+    blueprint = (repository_root / "render.yaml").read_text()
+    expected_settings = (
+        "type: web",
+        "runtime: python",
+        "rootDir: flaky-test-analyzer",
+        "buildCommand: pip install -r requirements.txt",
+        "startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT",
+        "healthCheckPath: /health",
+    )
+    assert all(setting in blueprint for setting in expected_settings)
+    assert "OPENAI_API_KEY" not in blueprint
+    assert "ADMIN_METRICS_TOKEN" not in blueprint
+
+
+def test_requirements_include_web_runtime_dependencies():
+    root = Path(__file__).resolve().parents[1]
+    requirements = {
+        re.split(r"[<>=!~]", line, maxsplit=1)[0].lower()
+        for line in (root / "requirements.txt").read_text().splitlines()
+        if line and not line.startswith("#")
+    }
+    assert {
+        "fastapi",
+        "uvicorn",
+        "python-multipart",
+        "pydantic",
+        "starlette",
+        "openai",
+        "python-dotenv",
+        "jinja2",
+    } <= requirements
 
 
 def test_production_entry_point_binds_all_interfaces_and_configured_port(monkeypatch):
