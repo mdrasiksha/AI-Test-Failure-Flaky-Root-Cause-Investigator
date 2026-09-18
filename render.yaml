@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: flaky-test-analyzer
+    runtime: python
+    rootDir: flaky-test-analyzer
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: ANALYTICS_ENABLED
+        value: "true"
+      - key: ANALYTICS_RETENTION_DAYS
+        value: "30"
+      - key: ANONYMOUS_SESSION_DAYS
+        value: "30"
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
