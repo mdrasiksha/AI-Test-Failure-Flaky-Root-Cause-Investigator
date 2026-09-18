@@ -31,6 +31,42 @@ The API runs at <http://127.0.0.1:8000>, and its interactive Swagger UI is at
 For production and Docker startup, environment variables, upload limits, and
 HTTPS guidance, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
+## MVP Validation Analytics
+
+Privacy-first product analytics record only page views, sample use, analysis
+lifecycle/type/success, optional-AI lifecycle, a cryptographically random
+anonymous browser session identifier, and optional useful/not-useful feedback.
+The identifier lasts `ANONYMOUS_SESSION_DAYS` (30 by default); it is not derived
+from browser or network attributes and does not prove a unique person.
+
+Analytics does **not** intentionally record uploaded artifacts or filenames,
+test/class names, errors, stack traces, selectors, source code, trace URLs,
+request/response content, headers, cookies, credentials, IP addresses, customer
+identity, or browser fingerprints. Events and feedback expire after
+`ANALYTICS_RETENTION_DAYS` (30 by default); cleanup runs safely at startup.
+Set `ANALYTICS_ENABLED=false` to disable storage without disabling analysis.
+
+Aggregated metrics are available only when an independent
+`ADMIN_METRICS_TOKEN` is configured. Send it in `X-Admin-Token`—never in a URL:
+
+```powershell
+$env:ADMIN_METRICS_TOKEN = "your-local-admin-token"
+$headers = @{
+    "X-Admin-Token" = "your-local-admin-token"
+}
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/internal/metrics?days=7" `
+    -Headers $headers
+```
+
+`analysis_conversion_rate` is the percentage of distinct anonymous sessions
+with a completed analysis among distinct anonymous sessions with a page view in
+the selected period. A session that uses the sample and later completes a
+non-sample analysis contributes to `sample_to_own_analysis_sessions`; this is a
+product signal, not proof of customer intent. Metrics are aggregates and session
+counts must not be interpreted as counts of people.
+
 ## Web Interface
 
 The server root is now a small, server-rendered QA application. After setup,
