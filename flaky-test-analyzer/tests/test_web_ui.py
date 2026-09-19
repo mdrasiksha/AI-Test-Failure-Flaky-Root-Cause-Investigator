@@ -10,12 +10,23 @@ ROOT = Path(__file__).resolve().parents[1]
 client = TestClient(main.app)
 
 
-def test_home_is_product_html_and_forms_exist():
+def test_home_is_product_html_and_forms_exist(monkeypatch):
+    monkeypatch.delenv("AI_ANALYSIS_ENABLED", raising=False)
     response = client.get("/")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     for text in ("Find out why your automated test failed.", "Test Failure", "Flaky History", "Playwright Trace", "Try Sample"):
         assert text in response.text
+    assert "AI root-cause analysis — Coming soon" in response.text
+    assert 'name="use_ai"' not in response.text
+
+
+def test_ai_checkbox_is_available_when_enabled(monkeypatch):
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Coming soon" not in response.text
+    assert response.text.count('name="use_ai"') == 2
 
 
 def test_health_and_original_api_remain_available():
@@ -65,6 +76,7 @@ def _ai_result():
 
 
 def test_ai_checkbox_uses_mocked_ai(monkeypatch):
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
     monkeypatch.setattr(main, "analyze_with_ai", lambda evidence: _ai_result())
     sample = (ROOT / "sample_data/playwright/locator_timeout.xml").read_bytes()
     response = client.post("/ui/analyze-junit", data={"use_ai": "true"}, files={"file": ("run.xml", sample, "application/xml")})
@@ -74,6 +86,7 @@ def test_ai_checkbox_uses_mocked_ai(monkeypatch):
 
 
 def test_missing_ai_key_is_friendly(monkeypatch):
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
     def unavailable(evidence):
         raise main.AIConfigurationError("OPENAI_API_KEY is not configured")
     monkeypatch.setattr(main, "analyze_with_ai", unavailable)

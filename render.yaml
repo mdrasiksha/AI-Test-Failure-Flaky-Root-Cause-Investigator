@@ -15,5 +15,7 @@ services:
         value: "30"
       - key: ANONYMOUS_SESSION_DAYS
         value: "30"
+      - key: AI_ANALYSIS_ENABLED
+        value: "false"
       - key: OPENAI_MODEL
         value: gpt-5-mini

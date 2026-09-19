@@ -22,6 +22,7 @@ from backend.config import (
     MAX_HISTORY_TOTAL_MB,
     MAX_TRACE_UPLOAD_MB,
     MAX_UPLOAD_MB,
+    ai_analysis_enabled,
     max_ai_tests_per_request,
 )
 from backend.flaky_detector import analyze_history, get_test_id
@@ -90,9 +91,9 @@ async def anonymous_product_analytics(request: Request, call_next):
         _record_event(session_id, "sample_used", "sample")
     if analysis_type:
         _record_event(session_id, "analysis_started", analysis_type)
-    direct_ai = path == "/analyze-ai" or (
+    direct_ai = ai_analysis_enabled() and (path == "/analyze-ai" or (
         path == "/analyze-trace" and request.query_params.get("use_ai", "false").lower() == "true"
-    )
+    ))
     if direct_ai:
         _record_event(session_id, "ai_analysis_requested", analysis_type, True)
 
@@ -227,7 +228,11 @@ def build_ai_evidence(
 
 @app.get("/", response_class=HTMLResponse)
 def root(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"ai_analysis_enabled": ai_analysis_enabled()},
+    )
 
 
 @app.get("/api")
@@ -332,7 +337,7 @@ async def analyze_trace_upload(
         await junit_file.close()
     summary = compact_trace_summary(analysis)
     ai_analysis = None
-    if use_ai:
+    if use_ai and ai_analysis_enabled():
         evidence: dict[str, object] = {
             "test_name": (combined or [{}])[0].get("test_name")
             or "unknown trace test",
@@ -511,7 +516,8 @@ async def analyze_ai(file: UploadFile | None = File(default=None)) -> dict[str, 
         )
 
     results: list[dict[str, object]] = []
-    ai_limit = max_ai_tests_per_request()
+    enabled = ai_analysis_enabled()
+    ai_limit = max_ai_tests_per_request() if enabled else 0
     failures_seen = 0
     for test in tests:
         if test["status"] not in {"failed", "error"}:
@@ -520,7 +526,7 @@ async def analyze_ai(file: UploadFile | None = File(default=None)) -> dict[str, 
         framework_analysis = analyze_playwright_failure(test)
         failures_seen += 1
         ai_analysis = None
-        if failures_seen <= ai_limit:
+        if enabled and failures_seen <= ai_limit:
             evidence = build_ai_evidence(test, classification, framework_analysis)
             ai_analysis = await _run_ai(evidence)
         results.append(
@@ -541,11 +547,11 @@ async def analyze_ai(file: UploadFile | None = File(default=None)) -> dict[str, 
         "failures_analyzed": min(len(results), ai_limit),
         "total_failures": len(results),
         "ai_limit": ai_limit,
-        "ai_analysis_limited": len(results) > ai_limit,
+        "ai_analysis_limited": enabled and len(results) > ai_limit,
         "ai_limit_message": (
             f"AI analysis was limited to {ai_limit} of {len(results)} failures; "
             "deterministic analysis is included for every failure."
-            if len(results) > ai_limit else None
+            if enabled and len(results) > ai_limit else None
         ),
         "tests": results,
     }
@@ -572,7 +578,7 @@ async def ui_analyze_junit(
         return _error_page(request, "JUnit reports must use the .xml extension.")
     try:
         result = await upload_junit(_upload(data, filename, "application/xml"))
-        if use_ai:
+        if use_ai and ai_analysis_enabled():
             _record_event(
                 request.state.anonymous_session_id, "ai_analysis_requested", "failure", True
             )
@@ -639,12 +645,13 @@ async def ui_analyze_trace(
         await junit_file.close()
         return _error_page(request, "The optional JUnit report must use the .xml extension.")
     try:
-        if use_ai:
+        if use_ai and ai_analysis_enabled():
             _record_event(
                 request.state.anonymous_session_id, "ai_analysis_requested", "trace", True
             )
-        result = await analyze_trace_upload(trace_file, junit_file, use_ai)
-        if use_ai:
+        effective_use_ai = use_ai and ai_analysis_enabled()
+        result = await analyze_trace_upload(trace_file, junit_file, effective_use_ai)
+        if effective_use_ai:
             _record_event(
                 request.state.anonymous_session_id,
                 "ai_analysis_completed", "trace", True, True,

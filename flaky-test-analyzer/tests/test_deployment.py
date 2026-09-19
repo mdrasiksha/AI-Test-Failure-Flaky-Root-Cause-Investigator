@@ -119,6 +119,7 @@ def test_junit_upload_limit_returns_413(monkeypatch):
 
 
 def test_ai_limit_keeps_deterministic_results(monkeypatch):
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
     monkeypatch.setenv("MAX_AI_TESTS_PER_REQUEST", "2")
     calls = []
     monkeypatch.setattr(main, "analyze_with_ai", lambda evidence: calls.append(evidence) or {"summary": "ok"})
