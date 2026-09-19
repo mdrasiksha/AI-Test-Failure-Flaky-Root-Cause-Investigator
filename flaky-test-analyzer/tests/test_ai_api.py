@@ -46,6 +46,7 @@ def test_passing_test_causes_no_ai_call(monkeypatch: pytest.MonkeyPatch) -> None
 def test_multiple_failures_are_analyzed_and_deterministic_results_remain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
     evidence_seen = []
     monkeypatch.setattr(
         "backend.main.analyze_with_ai",
@@ -71,6 +72,7 @@ def test_multiple_failures_are_analyzed_and_deterministic_results_remain(
 def test_missing_key_returns_controlled_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
     def missing(evidence: object) -> None:
         raise AIConfigurationError("AI analysis is not configured; set OPENAI_API_KEY")
 
@@ -80,3 +82,20 @@ def test_missing_key_returns_controlled_configuration_error(
     )
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "ai_not_configured"
+
+
+def test_ai_is_disabled_by_default_and_forged_request_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AI_ANALYSIS_ENABLED", raising=False)
+    monkeypatch.setattr(
+        "backend.main.analyze_with_ai",
+        lambda evidence: pytest.fail("AI should not be called while disabled"),
+    )
+    response = post_xml(
+        '<testsuite><testcase name="bad"><failure type="AssertionError">failure</failure></testcase></testsuite>'
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tests"][0]["classification"]["category"] == "assertion"
+    assert body["tests"][0]["ai_analysis"] is None

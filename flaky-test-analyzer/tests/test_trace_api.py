@@ -32,6 +32,7 @@ def test_trace_analysis_works_without_ai(monkeypatch, trace_content):
 
 
 def test_ai_receives_only_compact_sanitized_evidence(monkeypatch, trace_content):
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "true")
     seen = []
     monkeypatch.setattr("backend.main.analyze_with_ai", lambda evidence: seen.append(evidence) or {"summary":"ok"})
     response = post(trace_content, True); assert response.status_code == 200

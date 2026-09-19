@@ -31,6 +31,7 @@ control.
 | `ANALYTICS_RETENTION_DAYS` | Required when analytics is enabled | `30` | Retention window for analytics and feedback. |
 | `ANONYMOUS_SESSION_DAYS` | Required when analytics is enabled | `30` | Anonymous cookie lifetime. |
 | `ADMIN_METRICS_TOKEN` | Optional | Generate a long random secret in Render | Enables `/internal/metrics`; when unset, that endpoint returns 404. Supply it only in the `X-Admin-Token` header. |
+| `AI_ANALYSIS_ENABLED` | Optional | `false` | Explicitly enables the AI controls and provider calls. AI analysis is disabled by default. |
 | `OPENAI_API_KEY` | Optional | Add as a Render secret | Enables optional OpenAI analysis. Deterministic analysis works without it. |
 | `OPENAI_MODEL` | Optional | `gpt-5-mini` | Model used for optional OpenAI analysis. |
 

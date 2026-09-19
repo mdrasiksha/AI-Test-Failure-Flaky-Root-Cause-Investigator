@@ -57,6 +57,12 @@ def openai_model() -> str:
     return os.getenv("OPENAI_MODEL", OPENAI_MODEL)
 
 
+def ai_analysis_enabled() -> bool:
+    """Return whether optional AI analysis is explicitly enabled."""
+
+    return os.getenv("AI_ANALYSIS_ENABLED", "false").strip().lower() == "true"
+
+
 def openai_api_key() -> str | None:
     """Return the optional provider key without exposing it through the API."""
 

@@ -68,3 +68,30 @@ def test_cleanup_and_disabled_mode(tmp_path, monkeypatch):
 def test_analytics_exception_does_not_break_analysis(monkeypatch):
     monkeypatch.setattr(analytics, "record_event", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     assert TestClient(app).get("/sample").status_code == 200
+
+
+def test_disabled_ai_request_records_no_ai_events(tmp_path, monkeypatch):
+    db = tmp_path / "disabled-ai.db"
+    monkeypatch.setenv("ANALYTICS_DB_PATH", str(db))
+    monkeypatch.setenv("ANALYTICS_ENABLED", "true")
+    monkeypatch.setenv("AI_ANALYSIS_ENABLED", "false")
+    analytics.initialize_storage()
+    monkeypatch.setattr(
+        "backend.main.analyze_with_ai",
+        lambda evidence: (_ for _ in ()).throw(AssertionError("AI called")),
+    )
+    response = TestClient(app).post(
+        "/analyze-ai",
+        files={
+            "file": (
+                "report.xml",
+                '<testsuite><testcase name="bad"><failure>failure</failure></testcase></testsuite>',
+                "application/xml",
+            )
+        },
+    )
+    assert response.status_code == 200
+    events = [row[0] for row in _events(db)]
+    assert "analysis_started" in events and "analysis_completed" in events
+    assert "ai_analysis_requested" not in events
+    assert "ai_analysis_completed" not in events
